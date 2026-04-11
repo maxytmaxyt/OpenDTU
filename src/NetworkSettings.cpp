@@ -12,6 +12,11 @@
 #include <ESPmDNS.h>
 #include <ETH.h>
 
+// Include headers for NAT routing
+#include "lwip/lwip_napt.h"
+#include "lwip/err.h"
+#include "dhcpserver/dhcpserver.h"
+
 #undef TAG
 static const char* TAG = "network";
 
@@ -102,7 +107,6 @@ void NetworkSettingsClass::NetworkEvent(const WiFiEvent_t event, WiFiEventInfo_t
         }
         break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-        // Reason codes can be found here: https://github.com/espressif/esp-idf/blob/5454d37d496a8c58542eb450467471404c606501/components/esp_wifi/include/esp_wifi_types_generic.h#L79-L141
         ESP_LOGW(TAG, "WiFi disconnected: %" PRIu8 "", info.wifi_sta_disconnected.reason);
         if (_networkMode == network_mode::WiFi) {
             ESP_LOGI(TAG, "Try reconnecting");
@@ -150,7 +154,6 @@ void NetworkSettingsClass::handleMDNS()
 {
     const bool mdnsEnabled = Configuration.get().Mdns.Enabled;
 
-    // Return if no state change
     if (_lastMdnsEnabled == mdnsEnabled) {
         return;
     }
@@ -184,6 +187,19 @@ void NetworkSettingsClass::setupMode()
         String ssidString = getApName();
         WiFi.softAPConfig(_apIp, _apIp, _apNetmask);
         WiFi.softAP(ssidString.c_str(), Configuration.get().Security.Password);
+
+        // --- NAPT / REPEATER LOGIC ---
+        // Initialize NAPT to share internet from Station to Access Point
+        ip_napt_init(32, 16);
+        ip_napt_enable_no(SOFTAP_IF, 1);
+
+        // Configure DNS for connected clients (Google DNS as fallback)
+        dhcps_lease_t lease;
+        lease.enable = true;
+        IPAddress dns(8, 8, 8, 8);
+        dhcps_set_option_info(DOMAIN_NAME_SERVER, &dns, sizeof(dns));
+        // -----------------------------
+
         _dnsServer->setErrorReplyCode(DNSReplyCode::NoError);
         _dnsServer->start(DNS_PORT, "*", WiFi.softAPIP());
         _dnsServerStatus = true;
@@ -200,20 +216,24 @@ void NetworkSettingsClass::setupMode()
 
 void NetworkSettingsClass::enableAdminMode()
 {
-    // This prevents a immediate "Disabling search for AP" when
-    // the network connection persists for a long time and the
-    // credentials gets changed.
     _connectTimeoutTimer = 0;
     _connectRedoTimer = 0;
 
     _adminTimeoutCounter = 0;
-    _adminTimeoutCounterMax = Configuration.get().WiFi.ApTimeout * 60;
+    // Set timeout to 0 (disabled) to ensure the AP stays alive as a repeater
+    _adminTimeoutCounterMax = 0; 
     _adminEnabled = true;
     setupMode();
 }
 
 void NetworkSettingsClass::disableAdminMode()
 {
+    // If we want to use it as a repeater, we ignore the disable request
+    // unless explicitly needed. For your case, we keep it enabled.
+    if (_networkMode == network_mode::WiFi) {
+        ESP_LOGI(TAG, "Repeater mode active: ignoring disableAdminMode");
+        return; 
+    }
     _adminEnabled = false;
     ESP_LOGI(TAG, "Admin mode disabled");
     setupMode();
@@ -221,7 +241,6 @@ void NetworkSettingsClass::disableAdminMode()
 
 bool NetworkSettingsClass::wifiConfigured() const
 {
-    // Check if SSID is empty
     return strcmp(Configuration.get().WiFi.Ssid, "");
 }
 
@@ -234,7 +253,6 @@ void NetworkSettingsClass::loop()
 {
     if (_ethConnected) {
         if (_networkMode != network_mode::Ethernet) {
-            // Do stuff when switching to Ethernet mode
             ESP_LOGI(TAG, "Switch to Ethernet mode");
             _networkMode = network_mode::Ethernet;
             WiFi.mode(WIFI_MODE_NULL);
@@ -242,7 +260,6 @@ void NetworkSettingsClass::loop()
             setHostname();
         }
     } else if (_networkMode != network_mode::WiFi) {
-        // Do stuff when switching to Ethernet mode
         ESP_LOGI(TAG, "Switch to WiFi mode");
         _networkMode = network_mode::WiFi;
         enableAdminMode();
@@ -250,6 +267,7 @@ void NetworkSettingsClass::loop()
     }
 
     if (millis() - _lastTimerCall > 1000) {
+        // Admin timeout logic modified: only count if _adminTimeoutCounterMax > 0
         if (_adminEnabled && _adminTimeoutCounterMax > 0) {
             _adminTimeoutCounter++;
             if (_adminTimeoutCounter % 10 == 0) {
@@ -261,30 +279,25 @@ void NetworkSettingsClass::loop()
             WiFi.disconnect(true, false);
             WiFi.mode(WIFI_MODE_NULL);
             if (_adminEnabled) {
-                // Call enableAdminMode to reset all the timeout values.
-                // Otherwise the search for AP gets disabled immediatly after wifi reset.
                 enableAdminMode();
             }
             applyConfig();
-            _lastReconnectAttempt = millis(); // Just in case if the reconnect method gets not triggered
+            _lastReconnectAttempt = millis();
         }
         _connectTimeoutTimer++;
         _connectRedoTimer++;
         _lastTimerCall = millis();
     }
+
     if (_adminEnabled) {
-        // Don't disable the admin mode when network is not available
         if (!isConnected()) {
             _adminTimeoutCounter = 0;
         }
-        // If WiFi is connected to AP for more than adminTimeoutCounterMax
-        // seconds, disable the internal Access Point
-        if (_adminTimeoutCounter > _adminTimeoutCounterMax) {
+        // AP will only disable if _adminTimeoutCounterMax is explicitly set > 0
+        if (_adminTimeoutCounterMax > 0 && _adminTimeoutCounter > _adminTimeoutCounterMax) {
             disableAdminMode();
         }
-        // It's nearly not possible to use the internal AP if the
-        // WiFi is searching for an AP. So disable searching afer
-        // WIFI_RECONNECT_TIMEOUT and repeat after WIFI_RECONNECT_REDO_TIMEOUT
+
         if (isConnected()) {
             _connectTimeoutTimer = 0;
             _connectRedoTimer = 0;
@@ -314,9 +327,7 @@ void NetworkSettingsClass::loop()
 void NetworkSettingsClass::applyConfig()
 {
     setHostname();
-
     const auto& config = Configuration.get().WiFi;
-
     if (!wifiConfigured()) {
         return;
     }
@@ -336,9 +347,7 @@ void NetworkSettingsClass::applyConfig()
     }
 
     ESP_LOG_LEVEL_LOCAL((success ? ESP_LOG_INFO : ESP_LOG_ERROR), TAG, "Configuring WiFi %s", success ? "done" : "failed");
-
     setStaticIp();
-
     Syslog.updateSettings(getHostname());
 }
 
@@ -347,22 +356,17 @@ void NetworkSettingsClass::setHostname()
     if (_networkMode == network_mode::Undefined) {
         return;
     }
-
     const String hostname = getHostname();
     bool success = false;
-
     ESP_LOGI(TAG, "Start setting hostname...");
     if (_networkMode == network_mode::WiFi) {
         success = WiFi.hostname(hostname);
-
-        // Evil bad hack to get the hostname set up correctly
         WiFi.mode(WIFI_MODE_APSTA);
         WiFi.mode(WIFI_MODE_STA);
         setupMode();
     } else if (_networkMode == network_mode::Ethernet) {
         success = ETH.setHostname(hostname.c_str());
     }
-
     ESP_LOG_LEVEL_LOCAL((success ? ESP_LOG_INFO : ESP_LOG_ERROR), TAG, "Setting hostname %s", success ? "done" : "failed");
 }
 
@@ -371,13 +375,10 @@ void NetworkSettingsClass::setStaticIp()
     if (_networkMode == network_mode::Undefined) {
         return;
     }
-
     const auto& config = Configuration.get().WiFi;
     const char* mode = (_networkMode == network_mode::WiFi) ? "WiFi" : "Ethernet";
     const char* ipType = config.Dhcp ? "DHCP" : "static";
-
     ESP_LOGI(TAG, "Start configuring %s %s IP...", mode, ipType);
-
     bool success = false;
     if (_networkMode == network_mode::WiFi) {
         if (config.Dhcp) {
@@ -402,7 +403,6 @@ void NetworkSettingsClass::setStaticIp()
                 IPAddress(config.Dns2));
         }
     }
-
     ESP_LOG_LEVEL_LOCAL((success ? ESP_LOG_INFO : ESP_LOG_ERROR), TAG, "Configure IP %s", success ? "done" : "failed");
 }
 
@@ -411,10 +411,8 @@ IPAddress NetworkSettingsClass::localIP() const
     switch (_networkMode) {
     case network_mode::Ethernet:
         return ETH.localIP();
-        break;
     case network_mode::WiFi:
         return WiFi.localIP();
-        break;
     default:
         return INADDR_NONE;
     }
@@ -425,10 +423,8 @@ IPAddress NetworkSettingsClass::subnetMask() const
     switch (_networkMode) {
     case network_mode::Ethernet:
         return ETH.subnetMask();
-        break;
     case network_mode::WiFi:
         return WiFi.subnetMask();
-        break;
     default:
         return IPAddress(255, 255, 255, 0);
     }
@@ -439,10 +435,8 @@ IPAddress NetworkSettingsClass::gatewayIP() const
     switch (_networkMode) {
     case network_mode::Ethernet:
         return ETH.gatewayIP();
-        break;
     case network_mode::WiFi:
         return WiFi.gatewayIP();
-        break;
     default:
         return INADDR_NONE;
     }
@@ -453,10 +447,8 @@ IPAddress NetworkSettingsClass::dnsIP(const uint8_t dns_no) const
     switch (_networkMode) {
     case network_mode::Ethernet:
         return ETH.dnsIP(dns_no);
-        break;
     case network_mode::WiFi:
         return WiFi.dnsIP(dns_no);
-        break;
     default:
         return INADDR_NONE;
     }
@@ -470,10 +462,8 @@ String NetworkSettingsClass::macAddress() const
             return _w5500->macAddress();
         }
         return ETH.macAddress();
-        break;
     case network_mode::WiFi:
         return WiFi.macAddress();
-        break;
     default:
         return "";
     }
@@ -485,36 +475,27 @@ String NetworkSettingsClass::getHostname()
     char preparedHostname[WIFI_MAX_HOSTNAME_STRLEN + 1];
     char resultHostname[WIFI_MAX_HOSTNAME_STRLEN + 1];
     uint8_t pos = 0;
-
     const uint32_t chipId = Utils::getChipId();
     snprintf(preparedHostname, WIFI_MAX_HOSTNAME_STRLEN + 1, config.WiFi.Hostname, chipId);
-
     const char* pC = preparedHostname;
-    while (*pC && pos < WIFI_MAX_HOSTNAME_STRLEN) { // while !null and not over length
-        if (isalnum(*pC)) { // if the current char is alpha-numeric append it to the hostname
+    while (*pC && pos < WIFI_MAX_HOSTNAME_STRLEN) {
+        if (isalnum(*pC)) {
             resultHostname[pos] = *pC;
             pos++;
         } else if (*pC == ' ' || *pC == '_' || *pC == '-' || *pC == '+' || *pC == '!' || *pC == '?' || *pC == '*') {
             resultHostname[pos] = '-';
             pos++;
         }
-        // else do nothing - no leading hyphens and do not include hyphens for all other characters.
         pC++;
     }
-
-    resultHostname[pos] = '\0'; // terminate string
-
-    // last character must not be hyphen
+    resultHostname[pos] = '\0';
     while (pos > 0 && resultHostname[pos - 1] == '-') {
         resultHostname[pos - 1] = '\0';
         pos--;
     }
-
-    // Fallback if no other rule applied
     if (strlen(resultHostname) == 0) {
         snprintf(resultHostname, WIFI_MAX_HOSTNAME_STRLEN + 1, APP_HOSTNAME, chipId);
     }
-
     return resultHostname;
 }
 
