@@ -12,11 +12,28 @@
 #include <ESPmDNS.h>
 #include <ETH.h>
 
-// Include headers for NAT routing
-#include "lwip/lwip_napt.h"
+#include "lwip/opt.h"
 #include "lwip/err.h"
-#include "dhcpserver/dhcpserver.h"
+#include "lwip/lwip_napt.h"
+#include "esp_wifi.h"  // Wichtig für SOFTAP_IF
 
+// Wir definieren die fehlende Konstante zur Sicherheit selbst, 
+// falls der Header sie im Arduino-Kontext versteckt
+#ifndef SOFTAP_IF
+#define SOFTAP_IF ESP_IF_WIFI_AP
+#endif
+
+#ifndef DOMAIN_NAME_SERVER
+#define DOMAIN_NAME_SERVER 6
+#endif
+
+// Diese Funktion muss als extern "C" deklariert werden, 
+// damit der C++ Compiler sie in den C-Bibliotheken findet
+extern "C" {
+    #include "dhcpserver/dhcpserver.h"
+    err_t ip_napt_init(uint16_t max_nat, uint16_t max_chained);
+    err_t ip_napt_enable_no(uint8_t iface, uint8_t enable);
+}
 #undef TAG
 static const char* TAG = "network";
 
