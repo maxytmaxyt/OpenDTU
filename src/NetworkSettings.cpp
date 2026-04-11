@@ -1,7 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
-/*
- * Copyright (C) 2022-2026 Thomas Basler and others
- */
 #include "NetworkSettings.h"
 #include "Configuration.h"
 #include "SyslogLogger.h"
@@ -12,28 +8,30 @@
 #include <ESPmDNS.h>
 #include <ETH.h>
 
+// NAPT & LWIP Includes
 #include "lwip/opt.h"
 #include "lwip/err.h"
-#include "lwip/lwip_napt.h"
-#include "esp_wifi.h"  // Wichtig für SOFTAP_IF
+#include "esp_wifi.h"
 
-// Wir definieren die fehlende Konstante zur Sicherheit selbst, 
-// falls der Header sie im Arduino-Kontext versteckt
-#ifndef SOFTAP_IF
-#define SOFTAP_IF ESP_IF_WIFI_AP
-#endif
-
-#ifndef DOMAIN_NAME_SERVER
-#define DOMAIN_NAME_SERVER 6
-#endif
-
-// Diese Funktion muss als extern "C" deklariert werden, 
-// damit der C++ Compiler sie in den C-Bibliotheken findet
+// WICHTIG: Explizite Deklaration für den Linker
 extern "C" {
     #include "dhcpserver/dhcpserver.h"
+    
+    // Wir deklarieren die Funktionen manuell als extern C, 
+    // damit der Linker sie in der liblwip.a findet.
     err_t ip_napt_init(uint16_t max_nat, uint16_t max_chained);
     err_t ip_napt_enable_no(uint8_t iface, uint8_t enable);
 }
+
+// Falls SOFTAP_IF nicht definiert ist
+#ifndef SOFTAP_IF
+#define SOFTAP_IF 0x01 
+#endif
+
+#ifndef DOMAIN_NAME_SERVER
+#define DOMAIN_NAME_SERVER 0x06
+#endif
+
 #undef TAG
 static const char* TAG = "network";
 
