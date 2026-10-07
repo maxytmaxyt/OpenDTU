@@ -3,6 +3,7 @@
  * Copyright (C) 2022-2026 Thomas Basler and others
  */
 #include "WebApi_webapp.h"
+#ifndef OPENDTU_DISABLE_WEBAPP
 #include <MD5Builder.h>
 #include <__compiled_constants.h>
 
@@ -95,3 +96,4 @@ void WebApiWebappClass::init(AsyncWebServer& server, Scheduler& scheduler)
         responseBinaryDataWithETagCache(request, asyncsrv::T_text_javascript, asyncsrv::T_gzip, file_app_js_start, file_app_js_end - file_app_js_start);
     });
 }
+#endif

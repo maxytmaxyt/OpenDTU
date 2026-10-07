@@ -19,6 +19,32 @@ It was the goal to replace the original Hoymiles DTU (Telemetry Gateway) with th
 The documentation can be found [here](https://opendtu.solar/).
 Please feel free to support and create a PR in [this](https://github.com/tbnobody/OpenDTU-docs) repository to make the documentation even better.
 
+## Firmware without the browser UI
+
+This fork supports an opt-in app-only build. For a generic ESP32 board, select
+the dedicated environment:
+
+```sh
+pio run -e generic_esp32_app_only
+```
+
+For another board, add `-DOPENDTU_DISABLE_WEBAPP` to that board environment's
+`build_flags` in `platformio.ini` (keep its existing flags), then build it
+normally, for example:
+
+```sh
+pio run -e <your_board_environment>
+```
+
+The build no longer registers `/`, the static web assets, or the SPA fallback;
+requests for the browser UI therefore return 404. The HTTP API, OTA endpoint,
+and `/console` and live-data WebSockets remain enabled for the Android app.
+The option is disabled by default, so ordinary builds retain the standard
+OpenDTU browser UI. Keep an external configuration backup and verify app
+connectivity after flashing the custom firmware. Disabling the UI is not a
+firewall: API and WebSocket access still follows the device's configured
+authentication and network exposure.
+
 ## Breaking changes
 
 Generated using: `git log --date=short --pretty=format:"* %h%x09%ad%x09%s" | grep BREAKING`

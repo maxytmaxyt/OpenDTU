@@ -21,7 +21,9 @@
 #include "WebApi_prometheus.h"
 #include "WebApi_security.h"
 #include "WebApi_sysstatus.h"
+#ifndef OPENDTU_DISABLE_WEBAPP
 #include "WebApi_webapp.h"
+#endif
 #include "WebApi_ws_console.h"
 #include "WebApi_ws_live.h"
 #include <AsyncJson.h>
@@ -69,7 +71,9 @@ private:
     WebApiPrometheusClass _webApiPrometheus;
     WebApiSecurityClass _webApiSecurity;
     WebApiSysstatusClass _webApiSysstatus;
+#ifndef OPENDTU_DISABLE_WEBAPP
     WebApiWebappClass _webApiWebapp;
+#endif
     WebApiWsConsoleClass _webApiWsConsole;
     WebApiWsLiveClass _webApiWsLive;
 };
